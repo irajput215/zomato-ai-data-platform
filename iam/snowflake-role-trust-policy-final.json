@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "FINAL trust policy — the one that must be on the role in production.",
+    "Fill both placeholders from the output of:",
+    "    DESC INTEGRATION ZOMATO_S3_INT;",
+    "  <STORAGE_AWS_IAM_USER_ARN> <- STORAGE_AWS_IAM_USER_ARN",
+    "  <STORAGE_AWS_EXTERNAL_ID>  <- STORAGE_AWS_EXTERNAL_ID",
+    "Do NOT use arn:aws:iam::<ACCOUNT_ID>:root here. The principal must be",
+    "Snowflake's generated IAM USER, and the ExternalId condition is what stops",
+    "the confused-deputy problem. Both values are case sensitive."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowSnowflakeToReadTheRawBucket",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "<STORAGE_AWS_IAM_USER_ARN>"
+      },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": {
+          "sts:ExternalId": "<STORAGE_AWS_EXTERNAL_ID>"
+        }
+      }
+    }
+  ]
+}

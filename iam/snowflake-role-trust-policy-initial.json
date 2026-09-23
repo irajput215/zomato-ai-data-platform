@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "PLACEHOLDER trust policy. Use this ONLY at role-creation time so the role",
+    "can be created before Snowflake has told us its IAM user ARN.",
+    "Replace it with snowflake-role-trust-policy-final.json as soon as you have",
+    "run DESC INTEGRATION ZOMATO_S3_INT (snowflake/02_storage_integration.sql).",
+    "This version trusts your own account's root, which is too broad to leave in place."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PlaceholderTrustReplaceMe",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<ACCOUNT_ID>:root"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
