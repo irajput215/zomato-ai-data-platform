@@ -1,0 +1,175 @@
+version: 2
+
+# =============================================================================
+# Gold layer tests
+# =============================================================================
+# Notes on two things that look inconsistent until you know why:
+#
+# * fct_order_items.food_id -> dim_food is `severity: warn`. It is a genuinely
+#   useful referential check, but it is a 23M-row join and a food catalogue can
+#   legitimately lag behind the order stream. Warn, don't block the pipeline.
+#
+# * Every test on mart_review_insights carries `tags: [ai]` explicitly. The
+#   Airflow DAG builds in two phases:
+#       dbt build --exclude tag:ai   -> mart_review_insights is NOT built yet
+#       dbt build --select  tag:ai   -> only then does it exist
+#   If these tests were untagged they would run in phase 1 against a table that
+#   does not exist yet, and the pipeline would fail on its very first run.
+# =============================================================================
+
+models:
+  # ---------------------------------------------------------------------------
+  # Dimensions
+  # ---------------------------------------------------------------------------
+  - name: dim_restaurants
+    description: "Current-state restaurant dimension (deduped). SCD2 history lives in the snapshot."
+    columns:
+      - name: restaurant_id
+        description: "Primary key. Unique is an error here — the dedupe in the model guarantees it."
+        data_tests:
+          - unique
+          - not_null
+      - name: city
+        data_tests:
+          - not_null
+      - name: rating
+        description: "NULL means the source had no rating yet ('--' or 'NEW')."
+
+  - name: dim_customer
+    description: "Customer dimension with age segmentation."
+    columns:
+      - name: customer_id
+        data_tests:
+          - unique
+          - not_null
+      - name: age_segment
+        data_tests:
+          - accepted_values:
+              values: ['Gen Z', 'Millennial', 'Gen X', 'Boomer', 'Unknown']
+
+  - name: dim_food
+    description: "Dish catalogue."
+    columns:
+      - name: food_id
+        data_tests:
+          - unique
+          - not_null
+
+  - name: dim_date
+    description: "Generated calendar, one row per day."
+    columns:
+      - name: date_day
+        data_tests:
+          - unique
+          - not_null
+
+  # ---------------------------------------------------------------------------
+  # Facts
+  # ---------------------------------------------------------------------------
+  - name: fct_orders
+    description: "Incremental order fact (MERGE on order_id). 10M rows at default scale."
+    columns:
+      - name: order_id
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: "Referential integrity into dim_customer."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_id
+      - name: restaurant_id
+        description: "Referential integrity into dim_restaurants."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_restaurants')
+              field: restaurant_id
+      - name: order_status
+        data_tests:
+          - accepted_values:
+              values: ['Delivered', 'Cancelled', 'Refunded']
+      - name: sales_amount
+        data_tests:
+          - not_null
+
+  - name: fct_order_items
+    description: "Incremental order line item fact (MERGE on order_item_id). ~23M rows."
+    columns:
+      - name: order_item_id
+        data_tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: "Every line must belong to an order that loaded."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('fct_orders')
+              field: order_id
+      - name: food_id
+        data_tests:
+          - relationships:
+              to: ref('dim_food')
+              field: food_id
+              config:
+                severity: warn
+
+  # ---------------------------------------------------------------------------
+  # Business marts
+  # ---------------------------------------------------------------------------
+  - name: mart_daily_city_revenue
+    description: "GMV / AOV / cancel rate per day per city."
+    columns:
+      - name: city
+        data_tests:
+          - not_null
+      - name: gmv
+        description: "Delivered revenue only — cancellations are excluded."
+        data_tests:
+          - not_null
+      - name: cancel_rate
+        data_tests:
+          - not_null
+
+  - name: mart_delivery_sla
+    description: "p50 / p90 delivery time and late rate per city per hour."
+    columns:
+      - name: delivered_orders
+        data_tests:
+          - not_null
+
+  - name: mart_restaurant_performance
+    description: "One row per restaurant: revenue, rating, cancel rate."
+    columns:
+      - name: restaurant_id
+        data_tests:
+          - unique
+          - not_null
+      - name: revenue
+        data_tests:
+          - not_null
+
+  - name: mart_review_insights
+    description: "LLM sentiment / topic rolled up by city. Built only after enrichment."
+    config:
+      tags: [ai]
+    columns:
+      - name: reviews
+        data_tests:
+          - not_null:
+              config:
+                tags: [ai]
+      - name: sentiment_label
+        data_tests:
+          - accepted_values:
+              values: ['positive', 'negative', 'neutral']
+              config:
+                tags: [ai]
+      - name: topic
+        data_tests:
+          - not_null:
+              config:
+                tags: [ai]
