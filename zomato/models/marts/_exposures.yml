@@ -1,0 +1,84 @@
+version: 2
+
+# =============================================================================
+# Exposures — the downstream consumers of this warehouse.
+# =============================================================================
+# Declaring them buys three things:
+#   1. `dbt build --select +exposure:zomato_dashboard` builds exactly what that
+#      consumer needs, not the whole project.
+#   2. The lineage graph in `dbt docs` shows where the data is actually used,
+#      so "can I drop this column?" becomes answerable.
+#   3. dbt can warn you before a change breaks a named consumer.
+# =============================================================================
+
+exposures:
+  - name: zomato_dashboard
+    label: "Zomato operations dashboard"
+    type: dashboard
+    maturity: medium
+    url: "http://localhost:8501"
+    description: >
+      Streamlit dashboard (ai/dashboard.py) covering GMV trend, top cities,
+      delivery SLA heatmap and restaurant leaderboard.
+    depends_on:
+      - ref('mart_daily_city_revenue')
+      - ref('mart_delivery_sla')
+      - ref('mart_restaurant_performance')
+      - ref('mart_review_insights')
+      - ref('dim_date')
+    owner:
+      name: "Data Platform"
+      email: "data-platform@example.com"
+
+  - name: rag_chat_app
+    label: "Chat with your reviews (RAG)"
+    type: application
+    maturity: medium
+    url: "http://localhost:8501"
+    description: >
+      ai/rag_chat.py — embeds reviews with text-embedding-3-small, retrieves the
+      nearest neighbours for a question, and answers from those reviews only.
+    depends_on:
+      - ref('stg_reviews')
+    owner:
+      name: "Data Platform"
+      email: "data-platform@example.com"
+
+  - name: text_to_sql_app
+    label: "Chat with your warehouse (text-to-SQL)"
+    type: application
+    maturity: medium
+    url: "http://localhost:8502"
+    description: >
+      ai/text_to_sql.py — an LLM writes Snowflake SQL for an English question and
+      the query runs as the read-only ZOMATO_AI_RO role.
+    depends_on:
+      - ref('fct_orders')
+      - ref('dim_customer')
+      - ref('dim_restaurants')
+      - ref('mart_daily_city_revenue')
+      - ref('mart_restaurant_performance')
+      - ref('mart_delivery_sla')
+    owner:
+      name: "Data Platform"
+      email: "data-platform@example.com"
+
+  - name: zomato_batch_dag
+    label: "Daily Airflow batch pipeline"
+    type: application
+    maturity: high
+    url: "http://localhost:8080"
+    description: >
+      airflow/dags/zomato_batch.py — reload_raw -> dbt_build_core ->
+      enrich_reviews -> dbt_build_ai. This is what actually refreshes every
+      model in the project on a @daily schedule.
+    depends_on:
+      - ref('fct_orders')
+      - ref('fct_order_items')
+      - ref('mart_daily_city_revenue')
+      - ref('mart_delivery_sla')
+      - ref('mart_restaurant_performance')
+      - ref('mart_review_insights')
+    owner:
+      name: "Data Platform"
+      email: "data-platform@example.com"
