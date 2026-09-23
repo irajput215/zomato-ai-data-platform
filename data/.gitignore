@@ -1,0 +1,13 @@
+# Generated data — do not commit
+#
+# Everything here is either produced by data/generator/ or downloaded from the
+# project's Google Drive folder. It is too large for git.
+
+# Whole raw data lake mirror (one folder per table)
+raw/
+
+# Any CSV that slipped outside raw/
+*.csv
+
+# Columnar copies / AI artefacts
+*.parquet
