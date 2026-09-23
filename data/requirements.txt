@@ -1,0 +1,11 @@
+# This generator intentionally has NO third-party dependencies.
+#
+# Every module under data/generator/ uses only the Python 3.9+ standard
+# library (argparse, csv, random, hashlib, zlib, time, datetime, array,
+# pathlib, sys).  There is nothing to pip install:
+#
+#     python3 data/generator/generate_dimensions.py --small
+#     python3 data/generator/generate_facts.py      --small
+#
+# If you prefer to keep the (empty) dependency list explicit:
+# (none)
