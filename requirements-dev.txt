@@ -1,0 +1,8 @@
+# Development-only dependencies (not needed to run the pipeline).
+#
+#   pip install -r requirements-dev.txt
+#
+# pyyaml is used by scripts/check_project.py to validate every YAML file and to
+# cross-check dbt sources against the Snowflake DDL.
+
+pyyaml>=6.0
