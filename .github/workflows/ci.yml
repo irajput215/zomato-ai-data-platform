@@ -1,0 +1,143 @@
+name: CI
+
+# Everything here runs offline — no Snowflake, AWS or OpenAI credentials needed.
+# That is deliberate: a CI pipeline that only works with production secrets is a
+# CI pipeline nobody runs on a pull request.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dev dependencies
+        run: pip install --disable-pip-version-check -r requirements-dev.txt
+
+      - name: Syntax-check every Python file
+        # No colon in the echoed string: an unquoted YAML scalar containing ": "
+        # is parsed as a nested mapping.
+        run: python -m compileall -q ai data/generator ingestion scripts && echo "python ok"
+
+      - name: Generate a small dataset
+        run: |
+          python data/generator/generate_dimensions.py --small --out-dir data/raw
+          python data/generator/generate_facts.py --small --out-dir data/raw
+
+      - name: Project consistency checks
+        # Validates YAML/JSON, resolves every dbt ref() and source(), cross-checks
+        # declared sources against the SQL and Python that create them, and
+        # verifies each CSV header matches its RAW table column order.
+        run: python scripts/check_project.py
+
+      - name: Airflow DAG structure
+        # Imports the DAG against a stub Airflow API and asserts the task chain
+        # is the one the docs describe, that phase 1 excludes tag:ai and phase 2
+        # selects it, and that every raw table is copied. No Airflow needed.
+        run: python scripts/check_dag.py
+
+      - name: Check the CSVs contain no CR bytes
+        # A stray \r from csv.writer's default '\r\n' line terminator lands in the
+        # last column and breaks COPY INTO numeric parsing.
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          bad = [p for p in pathlib.Path("data/raw").rglob("*.csv") if b"\r" in p.read_bytes()]
+          if bad:
+              sys.exit(f"CR bytes found in: {[str(p) for p in bad]}")
+          print("no CR bytes in any generated CSV — ok")
+          PY
+
+  dbt-parse:
+    name: dbt parse
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dbt
+        run: pip install --disable-pip-version-check "dbt-snowflake==1.8.*"
+
+      - name: dbt parse (every target)
+        working-directory: zomato
+        # dbt parse renders the project (models, YAML, Jinja, profiles) without
+        # connecting to Snowflake, so dummy credentials are enough to catch a
+        # broken ref, a malformed schema file, or a Jinja error.
+        #
+        # All three profile targets are parsed because profiles.yml is easy to
+        # break in a way that only shows up on one of them.
+        env: &dbt-env
+          SNOWFLAKE_ACCOUNT: dummy_account
+          SNOWFLAKE_USER: dummy_user
+          SNOWFLAKE_PASSWORD: dummy_password
+          SNOWFLAKE_PRIVATE_KEY_PATH: /tmp/dummy_key.p8
+          DBT_THREADS: '4'
+        run: |
+          for target in dev prod dev_keypair; do
+            echo "::group::dbt parse --target $target"
+            dbt parse --profiles-dir . --target "$target" --no-partial-parse
+            echo "::endgroup::"
+          done
+
+      - name: Verify the two-phase tag split
+        working-directory: zomato
+        # The Airflow DAG builds `--exclude tag:ai` BEFORE the LLM enrichment
+        # step and `--select tag:ai` after it. If mart_review_insights ever
+        # leaked into phase 1, the very first pipeline run would fail on a table
+        # that does not exist yet. Assert the split here, not at 3am.
+        env: *dbt-env
+        run: |
+          set -euo pipefail
+
+          if dbt ls --profiles-dir . --resource-type model --exclude tag:ai --output name \
+             | grep -qx "mart_review_insights"; then
+            echo "FAIL: mart_review_insights must NOT be selected by --exclude tag:ai"
+            exit 1
+          fi
+          echo "ok: phase 1 excludes mart_review_insights"
+
+          if ! dbt ls --profiles-dir . --select tag:ai --output name \
+               | grep -qx "mart_review_insights"; then
+            echo "FAIL: mart_review_insights must be selected by --select tag:ai"
+            exit 1
+          fi
+          echo "ok: phase 2 selects mart_review_insights"
+
+          if ! dbt ls --profiles-dir . --select tag:ai --output name \
+               | grep -qx "assert_review_insight_grain_is_unique"; then
+            echo "FAIL: the ai-tagged singular test must run in phase 2"
+            exit 1
+          fi
+          echo "ok: phase 2 includes the ai-tagged test"
+
+  docker-build:
+    name: Airflow image builds
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the Airflow image
+        uses: docker/build-push-action@v6
+        with:
+          context: airflow
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
