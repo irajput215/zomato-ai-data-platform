@@ -1,0 +1,142 @@
+# =============================================================================
+# Local Airflow 3.x (LocalExecutor) for the Zomato batch pipeline.
+# =============================================================================
+#   cp example.env .env      # fill in SNOWFLAKE_* and OPENAI_API_KEY
+#   docker compose build
+#   docker compose up -d
+#   open http://localhost:8080        # admin / admin
+#
+# Airflow 3 differences from 2.x that this file encodes:
+#   * `webserver` became `api-server`
+#   * DAG parsing moved into its own `dag-processor` component
+#   * tasks call the Execution API over HTTP, so AIRFLOW__CORE__EXECUTION_API_SERVER_URL
+#     must point at the api-server's SERVICE NAME (not localhost) — without it,
+#     every task dies with "state mismatch ... failed"
+#   * the FAB auth manager provides the classic username/password login
+# =============================================================================
+x-airflow-common: &airflow-common
+  build: .
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__CORE__FERNET_KEY: 'ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg='
+
+    # Airflow 3 signs inter-component (Execution API) calls with this secret.
+    # Replace it with your own random string for anything beyond a laptop demo:
+    #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+    AIRFLOW__API_AUTH__JWT_SECRET: 'change-me-please-a-random-secret'
+
+    # CRITICAL in multi-container Airflow 3: tasks reach the Execution API by the
+    # api-server's service name. Pointing this at localhost breaks every task.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://apiserver:8080/execution/'
+
+    # The incremental MERGEs are not concurrency-safe; run one DAG at a time.
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: '4'
+
+    # --- read by dbt (via profiles.yml env_var) and by enrich_reviews.py ------
+    SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT}
+    SNOWFLAKE_USER: ${SNOWFLAKE_USER}
+    SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD}
+    SNOWFLAKE_ROLE: ${SNOWFLAKE_ROLE:-DBT_ROLE}
+    SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE:-ZOMATO_WH}
+    SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE:-ZOMATO}
+    SNOWFLAKE_SCHEMA: ${SNOWFLAKE_SCHEMA:-STAGING}
+    OPENAI_API_KEY: ${OPENAI_API_KEY}
+    OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+    SAMPLE_N: ${SAMPLE_N:-5}
+    DBT_TARGET: ${DBT_TARGET:-dev}
+    DBT_THREADS: ${DBT_THREADS:-8}
+
+    # --- the COPY task's connection ------------------------------------------
+    # This is how the Snowflake operator authenticates. Key-pair auth is
+    # strongly preferred over a password; see airflow/example.env.
+    AIRFLOW_CONN_SNOWFLAKE_DEFAULT: >-
+      {"conn_type":"snowflake",
+       "login":"${SNOWFLAKE_USER}",
+       "password":"${SNOWFLAKE_PASSWORD}",
+       "schema":"RAW",
+       "extra":{"account":"${SNOWFLAKE_ACCOUNT}",
+                "warehouse":"${SNOWFLAKE_WAREHOUSE:-ZOMATO_WH}",
+                "database":"${SNOWFLAKE_DATABASE:-ZOMATO}",
+                "role":"${SNOWFLAKE_ROLE:-DBT_ROLE}"}}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ../zomato:/opt/airflow/dbt/zomato   # the dbt project
+    - ../ai:/opt/airflow/ai               # enrich_reviews.py + common.py
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+
+  # One-shot: migrate the metadata DB, then create the admin user.
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin --password admin \
+          --firstname Admin --lastname User \
+          --role Admin --email admin@example.com
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8080:8080"
+    restart: always
+    healthcheck:
+      # Uses python rather than curl: python is guaranteed to be in the image,
+      # curl is not, and a healthcheck that silently errors is worse than none.
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v2/monitor/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: always
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Airflow 3: DAG parsing is its own component, not the scheduler's job.
+  dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    restart: always
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
