@@ -1,0 +1,148 @@
+version: 2
+
+# =============================================================================
+# Silver layer tests
+# =============================================================================
+# Two deliberate choices worth reading before you change anything here:
+#
+# 1. Uniqueness of the *messy* dimension keys is `severity: warn` at staging.
+#    The upstream exports are real-world data and can legitimately contain the
+#    same restaurant_id twice. Blocking the whole build on that would be wrong —
+#    the dedupe happens in dim_restaurants / dim_customer, and THAT uniqueness
+#    is tested as an error in _marts.yml.
+#
+# 2. veg_or_non_veg on stg_food is `warn`, not `error`, because the source CSV
+#    has rows missing the trailing field. They NULL-fill by design.
+# =============================================================================
+
+models:
+  # ---------------------------------------------------------------------------
+  - name: stg_restaurants
+    description: "Restaurant dimension, cleaned: '--' ratings, '₹ 200' costs and 'Area, City' strings all parsed."
+    columns:
+      - name: restaurant_id
+        description: "Primary key (cast from the raw string id)."
+        data_tests:
+          - not_null
+          - unique:
+              config:
+                severity: warn
+      - name: restaurant_name
+        data_tests:
+          - not_null
+      - name: city
+        description: "Canonical city, taken from after the last comma."
+        data_tests:
+          - not_null
+      - name: rating
+        description: "NULL when the source said '--' or 'NEW'."
+      - name: cost_for_two
+        description: "Integer rupees, stripped of the ₹ symbol."
+
+  # ---------------------------------------------------------------------------
+  - name: stg_users
+    description: "Customer dimension, cleaned: lowercased emails, normalised gender, numeric age."
+    columns:
+      - name: customer_id
+        data_tests:
+          - not_null
+          - unique:
+              config:
+                severity: warn
+      - name: email
+        description: "Lowercased; NULL when the source had no usable email."
+      - name: gender
+        data_tests:
+          - accepted_values:
+              values: ['Male', 'Female', 'Other']
+      - name: age
+        description: "NULL when the source said 'NA'."
+
+  # ---------------------------------------------------------------------------
+  - name: stg_food
+    description: "Dish catalogue with a normalised veg / non-veg flag."
+    columns:
+      - name: food_id
+        data_tests:
+          - not_null
+          - unique
+      - name: food_name
+        data_tests:
+          - not_null
+      - name: veg_or_non_veg
+        description: "NULL for the handful of source rows missing the trailing field."
+        data_tests:
+          - accepted_values:
+              values: ['Veg', 'Non-Veg']
+              config:
+                severity: warn
+
+  # ---------------------------------------------------------------------------
+  - name: stg_menu
+    description: "Restaurant-to-dish mapping. Zero and unparseable prices are dropped."
+    columns:
+      - name: restaurant_id
+        data_tests:
+          - not_null
+      - name: price
+        data_tests:
+          - not_null
+
+  # ---------------------------------------------------------------------------
+  - name: stg_orders
+    description: "Order fact, renamed to warehouse vocabulary, with is_delivered derived."
+    # The cross-column invariant "delivered <=> has a delivery time" cannot be
+    # expressed as a generic column test, so it lives in
+    # tests/assert_delivery_fields_match_status.sql
+    columns:
+      - name: order_id
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        data_tests:
+          - not_null
+      - name: restaurant_id
+        data_tests:
+          - not_null
+      - name: city
+        data_tests:
+          - not_null
+      - name: order_status
+        data_tests:
+          - accepted_values:
+              values: ['Delivered', 'Cancelled', 'Refunded']
+      - name: sales_amount
+        data_tests:
+          - not_null
+
+  # ---------------------------------------------------------------------------
+  - name: stg_order_items
+    description: "~23M order line items, typed."
+    columns:
+      - name: order_item_id
+        data_tests:
+          - unique
+          - not_null
+      - name: order_id
+        data_tests:
+          - not_null
+      - name: quantity
+        data_tests:
+          - not_null
+
+  # ---------------------------------------------------------------------------
+  - name: stg_reviews
+    description: "Free-text reviews, with the restaurant's city joined in from dim source."
+    columns:
+      - name: review_id
+        data_tests:
+          - unique
+          - not_null
+      - name: comment
+        data_tests:
+          - not_null
+      - name: rating
+        data_tests:
+          - accepted_values:
+              values: [1, 2, 3, 4, 5]

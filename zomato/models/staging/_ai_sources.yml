@@ -1,0 +1,72 @@
+version: 2
+
+# =============================================================================
+# The AI source — written by ai/enrich_reviews.py, not by dbt.
+# =============================================================================
+# This is the interesting bit of the architecture: the LLM is just another
+# transformation step. Its output lands in a table, that table is declared as a
+# source, and from dbt's point of view it is no different from any other input.
+# mart_review_insights (tagged `ai`) is the only model that reads it, which is
+# what lets the DAG build `--exclude tag:ai` before enrichment has ever run.
+#
+# ⚠️  EVERY TEST BELOW CARRIES `tags: [ai]` — INCLUDING THE SOURCE TESTS.
+#
+# This is easy to get wrong, and the failure is nasty. Tagging only the model
+# (in _marts.yml) is not enough: `dbt build` also runs the generic tests declared
+# on *sources*, and a source test is its own node with its own tags. Untagged,
+# these four tests are selected by `dbt build --exclude tag:ai` and query
+# ZOMATO.AI.REVIEW_ENRICHED — a table that does not exist until
+# enrich_reviews.py has run at least once. The very first pipeline run would then
+# fail on a data problem that is not one.
+#
+# Prove the tagging works without a warehouse:
+#
+#   dbt ls --profiles-dir . --select source:ai --exclude tag:ai --output name
+#   # -> lists only `ai.review_enriched`, no test nodes
+#
+# REVIEW_ID is a STRING here even though RAW.reviews.review_id is a NUMBER —
+# the Python job writes it back as text. mart_review_insights casts to join.
+# =============================================================================
+
+sources:
+  - name: ai
+    database: ZOMATO
+    schema: AI
+    description: "LLM-enriched tables produced by ai/enrich_reviews.py (OpenAI)."
+    tables:
+      - name: review_enriched
+        description: "Per-review sentiment, topic and key issue from the LLM."
+        columns:
+          - name: review_id
+            description: "RAW.reviews.review_id, written back as a string."
+            data_tests:
+              - not_null:
+                  config:
+                    tags: [ai]
+              # The enrichment job is idempotent — it skips reviews already in
+              # this table — so a duplicate id really would be a bug.
+              - unique:
+                  config:
+                    tags: [ai]
+          - name: sentiment_label
+            data_tests:
+              - accepted_values:
+                  values: ['positive', 'negative', 'neutral']
+                  config:
+                    tags: [ai]
+          - name: sentiment_score
+            description: "Model's score in [-1.0, 1.0], clamped by validate_labels()."
+          - name: topic
+            data_tests:
+              - accepted_values:
+                  values:
+                    - 'food quality'
+                    - 'delivery'
+                    - 'pricing'
+                    - 'service'
+                    - 'packaging'
+                    - 'other'
+                  config:
+                    tags: [ai]
+          - name: model
+            description: "Which OpenAI model produced the row."
