@@ -1,0 +1,111 @@
+# =============================================================================
+# dbt connection profile
+# =============================================================================
+# This file is committed on purpose. It contains NO secrets — every credential
+# is read from an environment variable at run time, so the same file works on
+# your laptop, in CI, and inside the Airflow container.
+#
+# dbt finds it because every command in this project passes `--profiles-dir .`
+# (see the Makefile, the Airflow DAG and .github/workflows/ci.yml).
+#
+#   export SNOWFLAKE_ACCOUNT=... SNOWFLAKE_USER=... SNOWFLAKE_PASSWORD=...
+#   dbt debug --profiles-dir .
+#
+# -----------------------------------------------------------------------------
+# CHOOSING A TARGET  (DBT_TARGET, default: dev)
+# -----------------------------------------------------------------------------
+#   dev           password auth
+#   prod          password auth, production query tag
+#   dev_keypair   key-pair auth (JWT) — no password stored anywhere
+#
+#   DBT_TARGET=dev_keypair dbt build --profiles-dir .
+#
+# -----------------------------------------------------------------------------
+# WHY THREE OUTPUTS INSTEAD OF ONE CONDITIONAL OUTPUT
+# -----------------------------------------------------------------------------
+# dbt's profile renderer is stricter than it looks, in two ways that both
+# produce confusing errors:
+#
+#   1. `{{ ... }}` EXPRESSIONS work, but they must be QUOTED. An unquoted
+#      `threads: {{ env_var(...) }}` makes YAML read `{` as the start of a flow
+#      mapping and fail with "did not find expected ',' or '}'".
+#
+#   2. `{% ... %}` STATEMENTS are not supported at all. A `{% if %}` block fails
+#      with "found character that cannot start any token", which is a baffling
+#      message for a valid-looking template.
+#
+# So: quote every expression, and use named outputs selected by DBT_TARGET
+# instead of conditionals. That is what this file does. (ai/common.py solves the
+# same problem with a plain Python `if`, because there it is allowed.)
+# =============================================================================
+
+zomato:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+
+  outputs:
+
+    # -------------------------------------------------------------------------
+    # dev — password auth. The default.
+    # -------------------------------------------------------------------------
+    dev:
+      type: snowflake
+      account:   "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user:      "{{ env_var('SNOWFLAKE_USER') }}"
+      password:  "{{ env_var('SNOWFLAKE_PASSWORD', '') }}"
+      role:      "{{ env_var('SNOWFLAKE_ROLE', 'DBT_ROLE') }}"
+      database:  "{{ env_var('SNOWFLAKE_DATABASE', 'ZOMATO') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'ZOMATO_WH') }}"
+      # Base schema only. Each model layer overrides it via +schema in
+      # dbt_project.yml, so STAGING / MARTS / SNAPSHOTS stay separate.
+      schema:    "{{ env_var('SNOWFLAKE_SCHEMA', 'STAGING') }}"
+      # Quoted like every other expression here — see the note at the top of
+      # the file. dbt coerces the rendered string to an integer.
+      threads:   "{{ env_var('DBT_THREADS', '8') | int }}"
+      client_session_keep_alive: false
+      # Shows up in SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY — makes it obvious
+      # which queries came from dbt versus the Airflow load task or the apps.
+      query_tag: "zomato_dbt_dev"
+
+    # -------------------------------------------------------------------------
+    # prod — identical to dev, different query tag.
+    # -------------------------------------------------------------------------
+    prod:
+      type: snowflake
+      account:   "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user:      "{{ env_var('SNOWFLAKE_USER') }}"
+      password:  "{{ env_var('SNOWFLAKE_PASSWORD', '') }}"
+      role:      "{{ env_var('SNOWFLAKE_ROLE', 'DBT_ROLE') }}"
+      database:  "{{ env_var('SNOWFLAKE_DATABASE', 'ZOMATO') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'ZOMATO_WH') }}"
+      schema:    "{{ env_var('SNOWFLAKE_SCHEMA', 'STAGING') }}"
+      threads:   "{{ env_var('DBT_THREADS', '8') | int }}"
+      client_session_keep_alive: false
+      query_tag: "zomato_dbt_prod"
+
+    # -------------------------------------------------------------------------
+    # dev_keypair — key-pair (JWT) auth.
+    # -------------------------------------------------------------------------
+    # Requires SNOWFLAKE_PRIVATE_KEY_PATH. Register the public half on the
+    # Snowflake user once:
+    #
+    #   openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out rsa_key.p8
+    #   openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
+    #   ALTER USER <you> SET RSA_PUBLIC_KEY='<rsa_key.pub without the headers>';
+    #
+    # Then run with DBT_TARGET=dev_keypair. This is the right choice for CI/CD:
+    # no password is ever stored, and the key can be rotated or revoked without
+    # touching this file.
+    dev_keypair:
+      type: snowflake
+      account:   "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user:      "{{ env_var('SNOWFLAKE_USER') }}"
+      role:      "{{ env_var('SNOWFLAKE_ROLE', 'DBT_ROLE') }}"
+      database:  "{{ env_var('SNOWFLAKE_DATABASE', 'ZOMATO') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'ZOMATO_WH') }}"
+      schema:    "{{ env_var('SNOWFLAKE_SCHEMA', 'STAGING') }}"
+      threads:   "{{ env_var('DBT_THREADS', '8') | int }}"
+      client_session_keep_alive: false
+      authenticator:          snowflake_jwt
+      private_key_path:       "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
+      private_key_passphrase: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', '') }}"
+      query_tag: "zomato_dbt_dev_keypair"

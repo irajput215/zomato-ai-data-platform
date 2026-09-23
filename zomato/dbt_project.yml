@@ -1,0 +1,71 @@
+# =============================================================================
+# dbt project — Zomato medallion warehouse
+# =============================================================================
+# Two layers, both expressed as directory-level config so individual models
+# stay declarative and readable:
+#
+#   staging/  ->  Silver  :  one view per RAW source. Clean, type, rename.
+#   marts/    ->  Gold    :  dimensions, incremental facts, business marts.
+#
+# Snapshots land in a third schema via the `snapshots:` block below.
+# =============================================================================
+
+name: 'zomato'
+version: '1.0.0'
+config-version: 2
+
+profile: 'zomato'
+
+model-paths:    ["models"]
+analysis-paths: ["analyses"]
+test-paths:     ["tests"]
+seed-paths:     ["seeds"]
+macro-paths:    ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+  - "logs"
+
+# -----------------------------------------------------------------------------
+# Variables — the knobs you are most likely to want to change.
+# Override on the command line, e.g.
+#   dbt build --vars '{delivery_sla_minutes: 60}'
+# -----------------------------------------------------------------------------
+vars:
+  # An order delivered slower than this counts as "late" in mart_delivery_sla.
+  delivery_sla_minutes: 45
+  # Bounds for the generated calendar in dim_date.
+  date_spine_start: '2024-01-01'
+  date_spine_end: '2026-12-31'
+
+# -----------------------------------------------------------------------------
+# Models
+# -----------------------------------------------------------------------------
+models:
+  zomato:
+    staging:
+      +materialized: view
+      +schema: staging
+    marts:
+      # Tables, not views: these are the aggregates the BI tools and the
+      # text-to-SQL app query, and the facts are queried repeatedly.
+      +materialized: table
+      +schema: marts
+
+# -----------------------------------------------------------------------------
+# Snapshots — SCD2 history for the restaurant dimension.
+# `target_schema` is used deliberately (not `schema`): snapshot schema naming
+# does not go through the custom generate_schema_name macro in macros/.
+# -----------------------------------------------------------------------------
+snapshots:
+  zomato:
+    +target_schema: snapshots
+
+# -----------------------------------------------------------------------------
+# Tests — fail the build on bad data rather than silently shipping it.
+# -----------------------------------------------------------------------------
+data_tests:
+  zomato:
+    +store_failures: false

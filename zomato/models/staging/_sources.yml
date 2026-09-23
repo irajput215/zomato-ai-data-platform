@@ -1,0 +1,59 @@
+version: 2
+
+# =============================================================================
+# Bronze sources — the RAW tables that COPY INTO fills from S3.
+# =============================================================================
+# Column order in these tables mirrors raw/<table>/<table>.csv exactly; see
+# snowflake/04_raw_tables.sql. They are declared here so that:
+#   * `dbt build` knows the dependency and fails loudly if RAW is empty
+#   * the lineage graph in `dbt docs` starts at the lake, not at STAGING
+#
+# No `loaded_at_field` / freshness config: the CSV files carry no load
+# timestamp column, and using an event-time column like order_timestamp would
+# report "freshness" that has nothing to do with when the data was loaded.
+# Load-time monitoring lives in ZOMATO.ADMIN.PIPELINE_HEALTH instead.
+# =============================================================================
+
+sources:
+  - name: raw
+    database: ZOMATO
+    schema: RAW
+    description: "Bronze layer: CSVs loaded verbatim from s3://<bucket>/raw/."
+    tables:
+      - name: restaurants
+        description: "Messy restaurant dimension export. Cleaned by stg_restaurants."
+        columns:
+          - name: id
+            data_tests:
+              - not_null
+      - name: users
+        description: "Messy customer export. Cleaned by stg_users."
+        columns:
+          - name: user_id
+            data_tests:
+              - not_null
+      - name: food
+        description: "Food item catalogue (dish name + veg flag)."
+      - name: menu
+        description: "Restaurant-to-dish mapping with price."
+      - name: orders
+        description: "Generated order fact. 10M rows at default scale."
+        columns:
+          - name: order_id
+            data_tests:
+              - not_null
+              - unique
+      - name: order_items
+        description: "Generated order line items. ~23M rows at default scale."
+        columns:
+          - name: order_item_id
+            data_tests:
+              - not_null
+              - unique
+      - name: reviews
+        description: "Generated free-text reviews — the AI layer's input."
+        columns:
+          - name: review_id
+            data_tests:
+              - not_null
+              - unique
