@@ -1,0 +1,7 @@
+# S3 ingestion dependencies.
+#
+#   pip install -r ingestion/requirements.txt
+
+boto3>=1.34,<2
+botocore>=1.34,<2
+python-dotenv>=1.0
