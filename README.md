@@ -18,9 +18,94 @@ dashboard serves the marts. Every AI app that *reads* the warehouse does so as a
 **read-only role**; the enrichment job is the only one that writes, and the only
 one that needs a role which can.
 
+---
+
+## Architecture
+
+[![Interactive GitDiagram](https://img.shields.io/badge/Interactive_Architecture-GitDiagram-2563eb?style=for-the-badge&logo=diagramsdotnet)](https://gitdiagram.com/irajput215/zomato-ai-data-platform)
+
+```mermaid
+flowchart TD
+
+subgraph group_data["Data Preparation & Ingestion"]
+  node_dimension_generator["Dimension Generator"]
+  node_fact_generator["Fact Generator<br/>[generate_facts.py]"]
+  node_generator_config["Generator Config<br/>[config.py]"]
+  node_s3_uploader["S3 Uploader<br/>[upload_to_s3.py]"]
+  node_s3_verifier["S3 Verifier<br/>[verify_s3.py]"]
+  node_s3_lake[("AWS S3 Data Lake")]
+end
+
+subgraph group_warehouse["Warehouse & Medallion Pipeline"]
+  node_snowflake_load["Snowflake RAW Load<br/>[05_copy_into.sql]"]
+  node_staging["dbt Staging (Silver)"]
+  node_marts["dbt Marts (Gold)"]
+  node_snapshot["Restaurant SCD2 Snapshot"]
+  node_warehouse_store[("Snowflake Data Warehouse")]
+end
+
+subgraph group_orchestration["Orchestration"]
+  node_daily_dag["Airflow 3 Batch DAG<br/>[zomato_batch.py]"]
+end
+
+subgraph group_ai["AI Analytics & Consumption"]
+  node_ai_common["AI Engine Client<br/>[DeepSeek / OpenAI]"]
+  node_enrichment["Review Enrichment<br/>[enrich_reviews.py]"]
+  node_rag["RAG Review Chat<br/>[rag_chat.py]"]
+  node_text_sql["Governed Text-to-SQL<br/>[text_to_sql.py]"]
+  node_dashboard["Streamlit Operations Dashboard<br/>[dashboard.py]"]
+end
+
+node_dimension_generator -->|"uses settings"| node_generator_config
+node_fact_generator -->|"uses settings"| node_generator_config
+node_fact_generator -->|"reads dimensions"| node_dimension_generator
+node_s3_uploader -->|"uploads CSVs"| node_s3_lake
+node_s3_verifier -->|"validates objects"| node_s3_lake
+node_s3_lake -->|"COPY INTO"| node_snowflake_load
+node_snowflake_load -->|"writes RAW"| node_warehouse_store
+node_warehouse_store -->|"cleans sources"| node_staging
+node_staging -->|"builds models"| node_marts
+node_marts -->|"tracks history"| node_snapshot
+node_snapshot -.->|"stores history"| node_warehouse_store
+node_daily_dag -->|"runs COPY INTO"| node_snowflake_load
+node_daily_dag -->|"runs dbt build"| node_staging
+node_daily_dag -->|"runs snapshot"| node_snapshot
+node_daily_dag -->|"runs enrichment"| node_enrichment
+node_daily_dag -->|"builds AI mart"| node_marts
+node_enrichment -->|"uses"| node_ai_common
+node_rag -->|"uses"| node_ai_common
+node_text_sql -->|"uses"| node_ai_common
+node_dashboard -->|"queries marts"| node_warehouse_store
+node_enrichment -->|"writes enriched reviews"| node_warehouse_store
+node_rag -->|"reads reviews"| node_warehouse_store
+node_text_sql -->|"validates & executes SQL"| node_warehouse_store
+
+click node_dimension_generator "https://github.com/irajput215/zomato-ai-data-platform/blob/main/data/generator/generate_dimensions.py"
+click node_fact_generator "https://github.com/irajput215/zomato-ai-data-platform/blob/main/data/generator/generate_facts.py"
+click node_generator_config "https://github.com/irajput215/zomato-ai-data-platform/blob/main/data/generator/config.py"
+click node_s3_uploader "https://github.com/irajput215/zomato-ai-data-platform/blob/main/ingestion/upload_to_s3.py"
+click node_s3_verifier "https://github.com/irajput215/zomato-ai-data-platform/blob/main/ingestion/verify_s3.py"
+click node_snowflake_load "https://github.com/irajput215/zomato-ai-data-platform/blob/main/snowflake/05_copy_into.sql"
+click node_staging "https://github.com/irajput215/zomato-ai-data-platform/tree/main/zomato/models/staging"
+click node_marts "https://github.com/irajput215/zomato-ai-data-platform/tree/main/zomato/models/marts"
+click node_snapshot "https://github.com/irajput215/zomato-ai-data-platform/blob/main/zomato/snapshots/dim_restaurants_snapshot.sql"
+click node_warehouse_store "https://github.com/irajput215/zomato-ai-data-platform/blob/main/snowflake/01_setup.sql"
+click node_daily_dag "https://github.com/irajput215/zomato-ai-data-platform/blob/main/airflow/dags/zomato_batch.py"
+click node_ai_common "https://github.com/irajput215/zomato-ai-data-platform/blob/main/ai/common.py"
+click node_enrichment "https://github.com/irajput215/zomato-ai-data-platform/blob/main/ai/enrich_reviews.py"
+click node_rag "https://github.com/irajput215/zomato-ai-data-platform/blob/main/ai/rag_chat.py"
+click node_text_sql "https://github.com/irajput215/zomato-ai-data-platform/blob/main/ai/text_to_sql.py"
+click node_dashboard "https://github.com/irajput215/zomato-ai-data-platform/blob/main/ai/dashboard.py"
+```
+
+> **Interactive Visualization:** Explore the live interactive graph on [GitDiagram](https://gitdiagram.com/irajput215/zomato-ai-data-platform).
+
+<details>
+<summary><b>View Graphic Overview Diagram</b></summary>
+
 ![Architecture](docs/architecture.png)
 
----
+</details>
 
 ## What gets built
 
