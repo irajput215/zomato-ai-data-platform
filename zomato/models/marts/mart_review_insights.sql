@@ -20,7 +20,7 @@ with enriched as (
     select
         try_to_number(review_id)                        as review_id,
         sentiment_label,
-        try_to_number(sentiment_score)                  as sentiment_score,
+        try_to_double(sentiment_score::string)          as sentiment_score,
         topic,
         nullif(trim(key_issue), '')                     as key_issue,
         model

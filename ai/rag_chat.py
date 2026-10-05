@@ -64,13 +64,23 @@ def read_reviews_from_snowflake(sample_n: int) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+@st.cache_resource(show_spinner=False)
+def get_sentence_transformer(model_name: str):
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer(model_name)
+
+
 def embed_texts(client, texts: list[str], model: str) -> list[list[float]]:
-    """Embed in batches — the API accepts many inputs per request."""
+    """Embed using local SentenceTransformer if specified/available, otherwise via API."""
+    if "minilm" in model.lower() or "sentence-transformer" in model.lower() or model == "all-MiniLM-L6-v2":
+        st_model = get_sentence_transformer(model)
+        embeddings = st_model.encode(texts, batch_size=EMBED_BATCH_SIZE, show_progress_bar=False, normalize_embeddings=True)
+        return embeddings.tolist()
+
     vectors: list[list[float]] = []
     for start in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[start : start + EMBED_BATCH_SIZE]
         response = client.embeddings.create(model=model, input=batch)
-        # The API does not guarantee ordering; `index` does.
         ordered = sorted(response.data, key=lambda item: item.index)
         vectors.extend(item.embedding for item in ordered)
     return vectors
@@ -84,7 +94,8 @@ def load_reviews(sample_n: int, embedding_model: str) -> pd.DataFrame:
     The cache filename carries the sample size, so changing the slider does not
     silently serve you embeddings for a different set of rows.
     """
-    cache_file = CACHE_FILE.with_name(f"review_embeddings_{sample_n}.parquet")
+    model_slug = embedding_model.replace("/", "_").replace("-", "_")
+    cache_file = CACHE_FILE.with_name(f"review_embeddings_{model_slug}_{sample_n}.parquet")
 
     if cache_file.exists():
         return pd.read_parquet(cache_file)

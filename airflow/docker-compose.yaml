@@ -16,6 +16,8 @@
 # =============================================================================
 x-airflow-common: &airflow-common
   build: .
+  env_file:
+    - .env
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
@@ -44,7 +46,8 @@ x-airflow-common: &airflow-common
     SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE:-ZOMATO}
     SNOWFLAKE_SCHEMA: ${SNOWFLAKE_SCHEMA:-STAGING}
     OPENAI_API_KEY: ${OPENAI_API_KEY}
-    OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+    OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+    OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-deepseek-chat}
     SAMPLE_N: ${SAMPLE_N:-5}
     DBT_TARGET: ${DBT_TARGET:-dev}
     DBT_THREADS: ${DBT_THREADS:-8}

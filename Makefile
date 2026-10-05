@@ -11,12 +11,21 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-DBT_DIR   := zomato
-DBT       := dbt
-DBT_FLAGS := --project-dir $(DBT_DIR) --profiles-dir $(DBT_DIR)
+VENV_BIN   := $(shell if [ -f .venv/bin/dbt ]; then echo "./.venv/bin"; fi)
+DBT_DIR    := zomato
+DBT        := $(if $(VENV_BIN),$(VENV_BIN)/dbt,dbt)
+PYTHON     := $(if $(VENV_BIN),$(VENV_BIN)/python3,python3)
+DBT_FLAGS  := --project-dir $(DBT_DIR) --profiles-dir $(DBT_DIR)
+
+# Automatically load .env if present
+ifneq (,$(wildcard .env))
+    include .env
+    export
+endif
 
 .PHONY: help install data data-small upload upload-dry-run verify-s3 \
-        dbt-debug build snapshot build-ai enrich pipeline docs \
+        dbt-debug staging test-staging test run build snapshot build-ai enrich pipeline \
+        docs docs-generate docs-serve \
         dashboard rag text2sql airflow-up airflow-down airflow-logs \
         check clean
 
@@ -72,6 +81,21 @@ snowflake:  ## Print the Snowflake setup order
 dbt-debug:  ## Check the dbt <-> Snowflake connection
 	$(DBT) debug $(DBT_FLAGS)
 
+staging:  ## Run staging views
+	$(DBT) run --select staging $(DBT_FLAGS)
+
+# run:  ## Run all core models
+# 	$(DBT) run $(DBT_FLAGS)
+
+test-staging:  ## Test staging models (schema & quality tests from _staging.yml)
+	$(DBT) test --select "models/staging,test_type:generic" --exclude source:ai $(DBT_FLAGS)
+
+test:  ## Run all non-AI data tests
+	$(DBT) test --exclude source:ai --exclude tag:ai $(DBT_FLAGS)
+
+run:  ## Run all core models (excluding AI)
+	$(DBT) run --exclude tag:ai $(DBT_FLAGS)
+
 build:  ## Silver + Gold, excluding the AI mart and the snapshot
 	$(DBT) build --exclude tag:ai --exclude resource_type:snapshot $(DBT_FLAGS)
 
@@ -81,24 +105,29 @@ snapshot:  ## Run the SCD2 snapshot (the core build excludes it, so this owns it
 build-ai:  ## Build the AI-tagged mart; requires enrichment to have run
 	$(DBT) build --select tag:ai $(DBT_FLAGS)
 
-docs:  ## Generate and serve the dbt documentation site
+docs-generate:  ## Generate the dbt documentation site
 	$(DBT) docs generate $(DBT_FLAGS)
+
+docs-serve:  ## Serve the dbt documentation site locally
 	$(DBT) docs serve $(DBT_FLAGS)
+
+docs:  ## Generate and serve the dbt documentation site
+	$(DBT) docs generate $(DBT_FLAGS) && $(DBT) docs serve $(DBT_FLAGS)
 
 # ---------------------------------------------------------------------------
 # AI
 # ---------------------------------------------------------------------------
 enrich:  ## LLM-enrich a sample of reviews (SAMPLE_N, default 5)
-	python3 ai/enrich_reviews.py
+	$(PYTHON) ai/enrich_reviews.py
 
 dashboard:  ## Streamlit operations dashboard
-	streamlit run ai/dashboard.py
+	$(if $(VENV_BIN),$(VENV_BIN)/streamlit,streamlit) run ai/dashboard.py
 
 rag:  ## Streamlit RAG app — chat with your reviews
-	streamlit run ai/rag_chat.py
+	$(if $(VENV_BIN),$(VENV_BIN)/streamlit,streamlit) run ai/rag_chat.py
 
 text2sql:  ## Streamlit text-to-SQL app — chat with your warehouse
-	streamlit run ai/text_to_sql.py
+	$(if $(VENV_BIN),$(VENV_BIN)/streamlit,streamlit) run ai/text_to_sql.py
 
 # ---------------------------------------------------------------------------
 # End to end

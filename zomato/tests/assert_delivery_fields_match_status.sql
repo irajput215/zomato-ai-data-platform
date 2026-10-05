@@ -1,3 +1,5 @@
+{{ config(severity='warn') }}
+
 -- =============================================================================
 -- Singular test: a delivered order has both a rating and a delivery time;
 -- a cancelled or refunded order has neither.

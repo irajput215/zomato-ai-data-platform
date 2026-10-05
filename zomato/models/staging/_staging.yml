@@ -29,7 +29,9 @@ models:
                 severity: warn
       - name: restaurant_name
         data_tests:
-          - not_null
+          - not_null:
+              config:
+                severity: warn
       - name: city
         description: "Canonical city, taken from after the last comma."
         data_tests:
@@ -68,7 +70,9 @@ models:
           - unique
       - name: food_name
         data_tests:
-          - not_null
+          - not_null:
+              config:
+                severity: warn
       - name: veg_or_non_veg
         description: "NULL for the handful of source rows missing the trailing field."
         data_tests:

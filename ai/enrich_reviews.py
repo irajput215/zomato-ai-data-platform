@@ -246,7 +246,6 @@ def main() -> int:
 
     try:
         with conn.cursor() as cur:
-            cur.execute(CREATE_SCHEMA_SQL)
             cur.execute(CREATE_TABLE_SQL)
             cur.execute(SELECT_PENDING_SQL, {"sample_n": args.sample_n})
             pending = cur.fetchall()

@@ -16,7 +16,6 @@ with spine as (
     select
         dateadd(day, seq4(), '{{ var("date_spine_start") }}'::date) as date_day
     from table(generator(rowcount => 1200))
-
 )
 
 select

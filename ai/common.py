@@ -26,8 +26,8 @@ from openai import OpenAI
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
 
-DEFAULT_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
-DEFAULT_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+DEFAULT_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "deepseek-chat")
+DEFAULT_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
 # The read-only role the query-running apps use. Created in snowflake/01_setup.sql.
 AI_READONLY_ROLE = os.getenv("SNOWFLAKE_AI_ROLE", "ZOMATO_AI_RO")
@@ -97,8 +97,12 @@ def get_connection(
 
 
 def get_client() -> OpenAI:
-    """OpenAI client. Raises ConfigError with instructions if the key is absent."""
-    return OpenAI(api_key=require_env("OPENAI_API_KEY"))
+    """OpenAI-compatible client. Supports DeepSeek or other providers via OPENAI_BASE_URL."""
+    base_url = os.getenv("OPENAI_BASE_URL")
+    return OpenAI(
+        api_key=require_env("OPENAI_API_KEY"),
+        base_url=base_url if base_url else None,
+    )
 
 
 def fetch_dataframe(conn, sql: str, params: dict | None = None):
