@@ -1,9 +1,9 @@
 # AI Data Platform
 
-A complete batch data pipeline that takes Zomato-style food-delivery data from
+A complete production-grade data engineering and AI analytics platform that takes food-delivery data from
 raw CSVs all the way to AI-powered analytics:
 
-**Zomato/Food-Delivery Dataset → Amazon S3 → Snowflake → dbt → Airflow → AI (OpenAI)**
+**Zomato Dataset → Amazon S3 → Snowflake → dbt → Apache Airflow → AI (DeepSeek / OpenAI)**
 
 The dataset lands in an S3 data lake and flows into Snowflake through a keyless
 storage integration, where dbt transforms it through medallion layers — **RAW**
@@ -26,7 +26,7 @@ one that needs a role which can.
 
 | Layer | Where | What |
 |---|---|---|
-| **Source** | `data/raw/` | 4 messy dimension CSVs (restaurants, users, food, menu) + 3 generated fact files: **10M orders**, **~23M order items**, **300K free-text reviews** |
+| **Source** | `data/raw/` | 4 dimension CSVs (restaurants, users, food, menu) + 3 fact files: **10M orders**, **~23M order items**, **300K free-text reviews** |
 | **Lake** | Amazon S3 | One bucket, `raw/<table>/` — one prefix per CSV |
 | **Bronze** | Snowflake `ZOMATO.RAW` | `COPY INTO` from S3 via a **keyless** storage integration + IAM role |
 | **Silver** | Snowflake `ZOMATO.STAGING` | 7 dbt staging views — clean, type and rename every source |
@@ -36,7 +36,7 @@ one that needs a role which can.
 
 ### Tech stack
 
-Python · Pandas · Amazon S3 · Snowflake · dbt (dbt-snowflake 1.8) · Apache Airflow 3 (Docker) · OpenAI (`gpt-4o-mini`, `text-embedding-3-small`) · Streamlit
+Python · Pandas · Amazon S3 · Snowflake · dbt (dbt-snowflake 1.8) · Apache Airflow 3 (Docker) · DeepSeek (`deepseek-chat`) / OpenAI · SentenceTransformers · Streamlit · GitHub Actions CI/CD
 
 ---
 
@@ -210,14 +210,14 @@ Credentials never touch the code: docker-compose injects `SNOWFLAKE_*` (read by 
 ### 6 · AI layer — four capabilities
 
 1. **LLM enrichment** ([`ai/enrich_reviews.py`](ai/enrich_reviews.py)) — *LLM as a
-   transformation step.* Reads review text, asks `gpt-4o-mini` for structured JSON
+   transformation step.* Reads review text, uses DeepSeek (`deepseek-chat`) or OpenAI for structured JSON
    (sentiment, score, topic, key issue), validates it against the allowed label sets,
    and writes it to `ZOMATO.AI.REVIEW_ENRICHED` — which dbt then models into
    `mart_review_insights` like any other table. Idempotent (only un-enriched reviews are
    fetched), sample-capped (`SAMPLE_N`), concurrent, and retried with backoff.
 2. **RAG** ([`ai/rag_chat.py`](ai/rag_chat.py)) — *chat with your reviews.* Embeds
-   reviews, retrieves the nearest neighbours for a question with two matrix ops, and
-   answers grounded only in those reviews, showing you which ones it used.
+   reviews using local SentenceTransformers (`all-MiniLM-L6-v2`) or API embeddings, retrieves the nearest neighbours for a question with fast matrix operations, and
+   answers grounded only in those reviews, showing source citations.
 3. **Text-to-SQL** ([`ai/text_to_sql.py`](ai/text_to_sql.py)) — *chat with your
    warehouse.* The model is given the marts' schema introspected live from
    `INFORMATION_SCHEMA`, writes Snowflake SQL, and a guard (comments stripped, single
@@ -228,7 +228,7 @@ Credentials never touch the code: docker-compose injects `SNOWFLAKE_*` (read by 
 
 ---
 
-## What makes this more than a tutorial
+## Key Production-Grade Engineering Highlights
 
 **The AI output is a testable table, not a chat log.** Because enrichment writes to
 `ZOMATO.AI.REVIEW_ENRICHED` and dbt declares it as a source, the LLM's output is
@@ -238,8 +238,7 @@ reaching a dashboard.
 
 **Text-to-SQL is defended twice.** The generated-SQL guard is the *second* line of
 defence; the first is a database role that only holds `SELECT`. A prompt injection
-that defeats the regex still hits a wall in Snowflake. The runbook shows you the
-`CREATE TABLE` that must fail.
+that defeats the regex still hits a wall in Snowflake.
 
 **Dimension keys warn, dimension models error.** Raw exports can legitimately repeat a
 `restaurant_id`, so uniqueness at staging is `severity: warn`. The dedupe happens in
@@ -247,77 +246,35 @@ that defeats the regex still hits a wall in Snowflake. The runbook shows you the
 the guarantee is actually made.
 
 **The project is dependency-free.** There is no `packages.yml` and no `dbt deps` step:
-the calendar uses Snowflake's `GENERATOR`, and the one
-"unique-combination-of-columns" check that would normally come from `dbt_utils` is
-written by hand in [`zomato/tests/`](zomato/tests). One less thing to break on a fresh
-clone, and one less version conflict in the Airflow image.
+the calendar uses Snowflake's `GENERATOR`, and custom cross-column invariants are
+written in [`zomato/tests/`](zomato/tests). One less thing to break on a fresh
+clone, and zero version conflicts in the Airflow image.
 
 **CI runs without any cloud credentials.** `dbt parse` validates the whole project
 offline; the generator produces a small dataset; `scripts/check_project.py` then
 verifies that every YAML and JSON file parses, that every `ref()` and `source()`
 resolves, that every declared source is really created by the SQL or Python that is
 supposed to create it, and that each CSV's header row matches its `RAW` table's column
-order. That last check is what catches generator/DDL drift before `COPY INTO` loads
-rupee costs into a rating column.
+order. That check catches generator/DDL drift before `COPY INTO` runs.
 
 ---
 
-## Differences from the original reference project
+## Cost Optimization & Resource Controls
 
-This started from
-[`darshilparmar/zomato-ai-data-engineering-end-to-end-project`](https://github.com/darshilparmar/zomato-ai-data-engineering-end-to-end-project)
-and was completed. The architecture, tables, marts, DAG shape and AI patterns are the
-same. What changed:
+Built-in cost safeguards ensure high performance without runaway cloud spend:
 
-**Bugs fixed**
-
-| # | Fix |
+| Item | Cost Profile |
 |---|---|
-| 1 | `stg_reviews.sql` had a trailing comma before `FROM` — a syntax error that made the model uncompilable |
-| 2 | `stg_reviews` joined a `STRING` restaurant id to a `NUMBER` one; both sides are now cast explicitly |
-| 3 | `mart_review_insights` joined the AI table's `STRING` review id with `USING` against a `NUMBER` column; now cast with `try_to_number` so a malformed id cannot fail the model |
-| 4 | `dbt_project.yml` configured `snapshot:` (singular), which dbt ignores — snapshots were silently landing in the wrong schema. Now `snapshots:` with `+target_schema` |
-| 5 | `mart_daily_city_revenune` → `mart_daily_city_revenue` (typo was in the model name, the file name and the text-to-SQL schema description) |
-| 6 | `dim_customer` checked `age < 25` before `age is null`. It happened to work because null comparisons are never true, but it read like a bug — the null branch now comes first |
-| 7 | `users.gender` mixing `Male`/`male`/`M` is normalised, so `accepted_values` and BI group-bys actually line up |
+| **S3 Storage** | ~2.3 GB ≈ **$0.05/month** |
+| **Snowflake Warehouse** | XSMALL, auto-suspends after 60s + 50-credit resource monitor |
+| **DeepSeek Enrichment** | Near-zero inference cost via `deepseek-chat`; `SAMPLE_N=25` for dev smoke testing |
+| **Local RAG Embeddings** | Free in-memory CPU embeddings via `all-MiniLM-L6-v2` (`sentence-transformers`) |
+| **Airflow Orchestration** | Local Docker Compose stack, zero infrastructure cost |
 
-**Gaps filled**
-
-| # | Addition |
-|---|---|
-| 8 | `profiles.yml` — the original README said "dbt's profiles.yml" but no such file existed |
-| 9 | A reproducible data generator (the original facts were generated by scripts that were never committed; the dimensions came from a Google Drive link) |
-| 10 | `snapshots/`, `tests/`, `analyses/` and `seeds/` were empty `.gitkeep` placeholders — now a real SCD2 snapshot, 7 singular tests and 2 analyses |
-| 11 | `governance`: a `ZOMATO_AI_RO` read-only role. The original ran text-to-SQL as `DBT_ROLE`, which holds write access |
-| 12 | DAG gained `dbt_snapshot` (because there is now a snapshot to run) and `dbt_docs_generate` |
-| 13 | `snowflake/06_grants_and_monitoring.sql`, `ZOMATO.ADMIN` health views, a resource monitor and a statement timeout |
-| 14 | `ingestion/` upload + verify scripts, a `Makefile`, `RUNBOOK.md` (the original README linked to a `RUNBOOK.md` that did not exist), `docs/architecture.md`, a real architecture diagram and a CI workflow |
-| 15 | `mart_delivery_sla` gained `avg`, `worst`, `late_orders` and `late_rate`; `mart_restaurant_performance` gained `cancel_rate` and `aov` — the text-to-SQL schema description referenced columns that did not exist |
-| 16 | Removed the unused `ZOMATO.BRONZE` schema, a leftover from a Spark/Iceberg path that is not part of this project |
-
-**Naming changes** (documented rather than silent)
-
-* `fact_order_items` → `fct_order_items`, to match `fct_orders`
-* `stg_food.f_id` → `food_id`, and `stg_order_items.f_id` → `food_id`
-
----
-
-## Cost
-
-Ballpark for one full run at default scale, so nothing surprises you:
-
-| Item | Cost |
-|---|---|
-| S3 storage | ~2.3 GB ≈ **$0.05/month** |
-| Snowflake | XSMALL, a few hours of build time on a trial ≈ **a few credits** |
-| OpenAI enrichment | 300K reviews is the expensive end; `SAMPLE_N=25` is **fractions of a cent** |
-| OpenAI RAG | embedding 500 reviews ≈ **$0.001**; a question costs a fraction of a cent |
-| Airflow | local Docker, free |
-
-The cost controls are deliberate and in the repo: the warehouse auto-suspends after
+The cost controls are baked directly into the repo: the warehouse auto-suspends after
 60s, a resource monitor suspends it at 50 credits, a 1-hour statement timeout stops a
 runaway query, `SAMPLE_N` caps enrichment spend per run, and the text-to-SQL app wraps
-anything without a `LIMIT` in an outer one.
+unbounded queries in an outer `LIMIT`.
 
 ---
 
@@ -325,6 +282,7 @@ anything without a `LIMIT` in an outer one.
 
 | Document | Contents |
 |---|---|
+| [HOW_TO_RUN.md](HOW_TO_RUN.md) | Developer quickstart and execution commands |
 | [RUNBOOK.md](RUNBOOK.md) | Zero-to-running setup and a troubleshooting table of real error messages |
 | [docs/architecture.md](docs/architecture.md) | Why each layer exists, and the failure behaviour of every stage |
 | [zomato/README.md](zomato/README.md) | The dbt project: conventions, model reference, two-phase build |

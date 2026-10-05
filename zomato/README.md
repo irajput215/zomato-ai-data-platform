@@ -58,8 +58,7 @@ dbt 1.10+:
 | `invalidate_hard_deletes: True` in the snapshot | `hard_deletes: invalidate` |
 | generic-test arguments as `- unique: {config: {...}}` | an `arguments:` block per test |
 
-1.8 was a deliberate choice: it is the version the original reference project
-used, it installs cleanly on the Python 3.12 in the Airflow image, and it parses
+1.8 was a deliberate choice: it installs cleanly on the Python 3.12 in the Airflow image, and it parses
 this project with **no deprecation warnings at all** (that is why the YAML uses
 `data_tests:` rather than the older `tests:` key, which 1.8 warns about). If you
 move to a newer dbt, make those two changes and bump the pin in
